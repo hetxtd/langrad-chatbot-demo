@@ -2,7 +2,146 @@
 @tailwind components;
 @tailwind utilities;
 
-:root { color-scheme: light; }
-body { @apply bg-white text-gray-900 antialiased; }
-.container { @apply mx-auto max-w-5xl px-4; }
-.card { @apply rounded-2xl shadow-sm border border-gray-200 bg-white; }
+/* ---------- Langrad Global Brand Theme ---------- */
+
+:root {
+  --brand: #0A2342;         /* Deep navy blue */
+  --brand-600: #13335F;     /* Slightly lighter hover blue */
+  --brand-50: #E8EFF8;      /* Very light blue background */
+  --accent: #E10600;        /* Langrad red */
+  --accent-hover: #c90500;  /* Darker red hover */
+  --text-strong: #0F172A;   /* slate-900 */
+  --text-muted: #64748B;    /* slate-500 */
+  --card: #FFFFFF;
+  --border: #E5E7EB;
+  --bubble-user: #FDE8E8;   /* soft red tint */
+  --bubble-assistant: #F8FAFC; /* neutral background for bot replies */
+}
+
+/* Background gradient to give soft visual depth */
+body {
+  background: linear-gradient(180deg, #FAFBFF 0%, #FFFFFF 100%);
+  @apply text-gray-900 antialiased;
+}
+
+/* Layout container */
+.container {
+  @apply mx-auto max-w-4xl px-4 py-10;
+}
+
+/* ---------- Chat & Card Components ---------- */
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: 0 6px 24px rgba(15, 23, 42, 0.06);
+  @apply p-6;
+}
+
+/* Message bubbles */
+.message {
+  display: inline-block;
+  max-width: 80%;
+  margin-bottom: 0.75rem;
+  padding: 0.8rem 1rem;
+  border-radius: 12px;
+  line-height: 1.45;
+}
+
+.message.user {
+  background-color: var(--bubble-user);
+  color: var(--brand);
+  @apply self-end;
+}
+
+.message.bot {
+  background-color: var(--bubble-assistant);
+  color: var(--text-strong);
+}
+
+/* Buttons */
+.brand-btn {
+  background: var(--accent);
+  color: #fff;
+  border-radius: 12px;
+  transition: transform .05s ease;
+}
+
+.brand-btn:hover {
+  background: var(--accent-hover);
+  transform: translateY(-1px);
+}
+
+.brand-chip {
+  background: var(--brand-50);
+  color: var(--brand);
+  border: 1px solid rgba(15,108,189,0.12);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* Input area */
+input[type="text"], textarea {
+  width: 100%;
+  padding: 0.75rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  font-size: 1rem;
+  outline: none;
+}
+
+input[type="text"]:focus, textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(225, 6, 0, 0.2);
+}
+
+/* ---------- Header ---------- */
+header {
+  text-align: center;
+  margin-bottom: 1.5rem;
+}
+
+header h1 {
+  color: var(--brand);
+  font-size: 2rem;
+  font-weight: 700;
+  margin-bottom: 0.4rem;
+}
+
+header p {
+  color: var(--accent);
+  font-weight: 500;
+  letter-spacing: 0.3px;
+}
+
+/* ---------- Footer ---------- */
+footer {
+  text-align: center;
+  margin-top: 2.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.9rem;
+  color: var(--text-muted);
+}
+
+footer a {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+footer a:hover {
+  text-decoration: underline;
+}
+
+/* Small screen tweaks */
+@media (max-width: 640px) {
+  .container {
+    @apply px-3;
+  }
+  header h1 {
+    font-size: 1.6rem;
+  }
+}

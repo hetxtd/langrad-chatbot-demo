@@ -3,11 +3,13 @@ import { useEffect, useState } from 'react'
 
 type Msg = { role: 'user' | 'assistant'; content: string }
 
-// detect intent
-const BUY_INTENT =
-  /(quote|price|how much|timeline|lead ?time|site visit|engineer|send drawings|availability|when can|cost)/i
+// “Done” detector (incl. Nigerian phrasing)
 const DONE_REGEX =
-  /\b(that('?s| is)? all|done|we('?re| are)? done|no( more)?( questions)?|nothing else|go ahead|proceed|send it|forward it|carry on|that will be all|okay go|ok go)\b/i
+  /\b(that('?s| is)? all|done|we('?re| are)? done|no( more)?( questions)?|nothing else|go ahead|proceed|send it|forward it|carry on|that will be all|okay go|ok go|we dey done|make we proceed|carry go)\b/i
+
+// Explicit consent to share details / proceed
+const CONSENT_REGEX =
+  /\b(yes|yeah|yep|ok(ay)?|go ahead|proceed|do it|send it|please do|sure|alright|fine|that'?s fine|take my details|you can|go on)\b/i
 
 function normalizePhoneNGA(input: string): { ok: boolean; e164?: string } {
   let s = input.replace(/[^\d+]/g, '')
@@ -24,20 +26,20 @@ export default function Chat() {
     {
       role: 'assistant',
       content:
-        "Hi there! I'm the Langrad assistant. How can we help you today?",
+        "Hi there! I’m the Langrad assistant. How can I help today?",
     },
   ])
   const [input, setInput] = useState('')
 
-  const [invitedHandoff, setInvitedHandoff] = useState(false)
   const [collecting, setCollecting] = useState<'none' | 'name' | 'email' | 'phone' | 'done'>('none')
   const [lead, setLead] = useState({ name: '', email: '', phone: '' })
   const [showWhatsApp, setShowWhatsApp] = useState(false)
+  const [waiting, setWaiting] = useState(false)
 
   useEffect(() => {
     const el = document.getElementById('chat-scroll')
     if (el) el.scrollTop = el.scrollHeight
-  }, [messages, showWhatsApp])
+  }, [messages, showWhatsApp, waiting])
 
   function append(role: 'user' | 'assistant', content: string) {
     setMessages(prev => [...prev, { role, content }])
@@ -50,7 +52,7 @@ export default function Chat() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: user, history }),
     })
-    if (!res.ok) return `Server error (${res.status}).`
+    if (!res.ok) return `I couldn't reach the server (status ${res.status}). Please try again.`
     const data = await res.json()
     return String(data.answer || '')
   }
@@ -61,7 +63,7 @@ export default function Chat() {
     setInput('')
     append('user', q)
 
-    // end-of-convo capture
+    // ---- Intake continuation ----
     if (collecting === 'name') {
       setLead(v => ({ ...v, name: q }))
       append('assistant', 'Thanks. What’s your email address?')
@@ -85,60 +87,59 @@ export default function Chat() {
         return
       }
       setLead(v => ({ ...v, phone: p.e164! }))
-      append('assistant', "Perfect — I’ll forward this to engineering for timelines or a quote.")
+      append('assistant', "Perfect — I’ll forward this to engineering for a timeline and quote.")
       setCollecting('done')
       setTimeout(() => setShowWhatsApp(true), 600)
-      append(
-        'assistant',
-        "Forwarding: *4×50KL food-grade vertical tanks — Ogun — timeline & quote.*\nSend this to Engineering on WhatsApp 👇"
-      )
+      append('assistant', "Forwarding: *your request has been noted for engineering — timeline & quote.*\nSend to Engineering on WhatsApp 👇")
       return
     }
 
-    // normal convo
-    const answer = await askLLM(q)
-    append('assistant', answer)
-
-    // detect “done”
-    if (DONE_REGEX.test(q)) {
-      append('assistant', "Got it — I’ll just take your details and forward this to our engineering team.")
+    // ---- Start intake only on explicit consent or “done” ----
+    if (collecting === 'none' && (CONSENT_REGEX.test(q) || DONE_REGEX.test(q))) {
+      append('assistant', "Okay — I’ll take your details and pass this to engineering.")
       append('assistant', "What’s your name?")
       setCollecting('name')
       return
     }
 
-    // detect buy intent
-    if (!invitedHandoff && BUY_INTENT.test(q + ' ' + answer)) {
-      setInvitedHandoff(true)
-      setTimeout(() => {
-        append(
-          'assistant',
-          'Would you like me to note this for a follow-up, or do you want to check one more thing first?'
-        )
-      }, 250)
-    }
+    // ---- Normal: ask the model, free conversation ----
+    setWaiting(true)
+    const answer = await askLLM(q)
+    setWaiting(false)
+    append('assistant', answer)
   }
 
   return (
     <div className="w-full mx-auto max-w-3xl">
-      <div className="card p-4 grid gap-4">
+      <div className="card grid gap-4" style={{ borderTop: '4px solid var(--brand)' }}>
         <div id="chat-scroll" className="h-[52vh] overflow-y-auto space-y-4 pr-2">
           {messages.map((m, i) => (
             <div key={i} className={m.role === 'user' ? 'text-right' : 'text-left'}>
               <div
-                className={`inline-block max-w-[85%] whitespace-pre-wrap rounded-2xl px-4 py-3 ${
-                  m.role === 'user' ? 'bg-purple-100' : 'bg-gray-100'
-                }`}
+                className="inline-block max-w-[85%] whitespace-pre-wrap rounded-2xl px-4 py-3"
+                style={{
+                  background: m.role === 'user' ? 'var(--bubble-user)' : 'var(--bubble-assistant)',
+                  color: 'var(--text-strong)',
+                }}
               >
                 {m.content}
               </div>
             </div>
           ))}
 
+          {waiting && (
+            <div className="text-left">
+              <div className="inline-block rounded-2xl px-4 py-3" style={{ background: 'var(--bubble-assistant)' }}>
+                <span>typing… • • •</span>
+              </div>
+            </div>
+          )}
+
           {showWhatsApp && (
             <div className="text-left mt-2">
               <button
-                className="inline-flex items-center gap-2 bg-green-600 text-white px-4 py-3 rounded-2xl shadow-md cursor-default select-none"
+                className="inline-flex items-center gap-2 px-4 py-3 rounded-2xl shadow-md cursor-default select-none"
+                style={{ background: 'var(--accent)', color: '#fff' }}
                 title="Demo: visual only"
               >
                 <svg width="20" height="20" viewBox="0 0 32 32" fill="currentColor" aria-hidden="true">
@@ -152,13 +153,18 @@ export default function Chat() {
 
         <div className="flex gap-2">
           <input
-            className="flex-1 border border-gray-300 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-purple-300"
+            className="flex-1 border rounded-xl px-4 py-3 focus:outline-none"
+            style={{ borderColor: 'var(--border)' }}
             placeholder="Type your message..."
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={e => (e.key === 'Enter' ? send() : undefined)}
           />
-          <button onClick={send} className="rounded-xl px-4 py-3 bg-purple-600 text-white hover:bg-purple-700">
+          <button
+            onClick={send}
+            className="brand-btn px-4 py-3 disabled:opacity-50 disabled:cursor-not-allowed"
+            disabled={waiting}
+          >
             Send
           </button>
         </div>

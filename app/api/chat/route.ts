@@ -11,62 +11,67 @@ export async function POST(req: NextRequest) {
   try {
     if (!process.env.OPENAI_API_KEY) {
       return new Response(JSON.stringify({ error: 'Missing OPENAI_API_KEY in .env.local' }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json' },
+        status: 500, headers: { 'Content-Type': 'application/json' }
       })
     }
 
     const { message, history } = await req.json()
     const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
 
-    // RAG retrieval
+    // RAG
     const index = await buildIndex(client, EMBED_MODEL)
     const qvec = await embedQuery(client, EMBED_MODEL, message)
     const hits = topK(index, qvec, 5)
     const context = hits.map(h => `[${h.doc.title}]\n${h.doc.body.slice(0, 1200)}`).join('\n\n')
 
-    // Concise, human persona (HeTxtd style)
-    const assistantPreamble =
-      "You are a calm project assistant for Langrad EMC. Understand Nigerian English and Pidgin. " +
-      "Answer first in 3–6 short sentences using the provided context. Ask at most one short follow-up. " +
-      "Do not show citations or file names. Never promise price or dates; say engineering will confirm. " +
-      "Do not ask for contact details or mention WhatsApp unless the user asks for price/quote/timeline/site visit/drawings/engineer, or says they have no more questions. " +
-      "Acknowledge details the user already provided (e.g., location) and do not ask for them again."
+    // Light rails, human tone
+    const system = `
+You are the Langrad assistant. Be natural, concise, and helpful (2–5 sentences).
+Use info from internal context; don't show citations or file names.
 
-    const contentPrompt =
-`Context (for you to use internally):
+Rails:
+- Never give prices or exact timelines; say engineering will confirm.
+- If user asks about quote/timeline/site visit/contact/drawings, OFFER a handoff (“I can have engineering follow up — want me to take your details?”).
+- Do not ask for contact details unless the user clearly says yes / ok / proceed or indicates they’re done.
+
+Style examples:
+- “We can handle that. Engineering usually checks site access and specs before confirming timelines. Want me to have them follow up?”
+- “Yes, food-grade vertical tanks are fine. I can pass this along for a quote and schedule if you like.”
+- “Got it. Anything else you want to add, or should I send this over?” (use sparingly)
+`
+
+    const userPrompt = `
+Context (internal only):
 ${context}
 
-User: ${message}
+User message:
+${message}
 
-Reply like a human assistant. Be concise and specific. 
-If anything is unclear, say you'll confirm with engineering.
-Do not include a 'Sources' section or links in your answer.`
+Reply as a warm, human coordinator. Answer first; if they ask for quote/timeline/contact, OFFER a follow-up (one short line).
+Do not collect details yourself; wait for explicit user consent or “done”. No citations, no contacts, no filler.
+`
 
     const messages = [
-      { role: 'system', content: assistantPreamble },
+      { role: 'system', content: system },
       ...(Array.isArray(history) ? history : []),
-      { role: 'user', content: contentPrompt },
-    ] as any
+      { role: 'user', content: userPrompt },
+    ] as const
 
     const resp = await client.chat.completions.create({
       model: CHAT_MODEL,
       messages,
-      temperature: 0.2,
+      temperature: 0.55,
     })
 
     const answer = resp.choices[0]?.message?.content ?? ''
 
-    // Clean human answer only
     return new Response(JSON.stringify({ answer }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
+      status: 200, headers: { 'Content-Type': 'application/json' }
     })
   } catch (e: any) {
     console.error('API /api/chat error:', e?.message || e)
     return new Response(JSON.stringify({ error: e?.message || 'Server error' }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' },
+      status: 500, headers: { 'Content-Type': 'application/json' }
     })
   }
 }
