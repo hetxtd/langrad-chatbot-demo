@@ -1,48 +1,69 @@
 'use client'
+
 import { useEffect, useState } from 'react'
 
 type Msg = { role: 'user' | 'assistant'; content: string }
 
-// “Done” detector (incl. Nigerian phrasing)
-const DONE_REGEX =
-  /\b(that('?s| is)? all|done|we('?re| are)? done|no( more)?( questions)?|nothing else|go ahead|proceed|send it|forward it|carry on|that will be all|okay go|ok go|we dey done|make we proceed|carry go)\b/i
-
-// Explicit consent to share details / proceed
-const CONSENT_REGEX =
-  /\b(yes|yeah|yep|ok(ay)?|go ahead|proceed|do it|send it|please do|sure|alright|fine|that'?s fine|take my details|you can|go on)\b/i
-
-function normalizePhoneNGA(input: string): { ok: boolean; e164?: string } {
-  let s = input.replace(/[^\d+]/g, '')
-  if (s.startsWith('+234')) s = s
-  else if (s.startsWith('234')) s = '+' + s
-  else if (s.startsWith('0') && s.length >= 10) s = '+234' + s.slice(1)
-  const ok = /^\+234\d{10}$/.test(s)
-  return ok ? { ok: true, e164: s } : { ok: false }
-}
+// Simple email check
 const isEmail = (s: string) => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/i.test(s.trim())
+
+// Very soft phone check – just “looks like a phone number”
+const isPhoneLike = (s: string) => {
+  const digits = s.replace(/\D/g, '')
+  return digits.length >= 7 // 7+ digits = good enough for demo
+}
+
+// Light heuristics to detect the user is asking for a quote/timeline
+const QUOTE_OR_TIMELINE_REGEX =
+  /\b(quote|pricing|price|cost|estimate|timeline|lead\s*time|site\s*visit|follow[-\s]?up)\b/i
+
+// Signals that indicate project specificity (we accumulate across history)
+const PROJECT_SIGNAL_REGEXES: RegExp[] = [
+  // Removed Nigerian locations – keep it generic / industrial
+  /\b(factory|plant|site|warehouse|yard|installation)\b/i,
+  /\b(food[-\s]?grade|stainless|316|304|galvanis(e|ed)|powder\s*coat)\b/i,
+  /\b(vertical|silo|tank|vessel|canopy|frame|lean[-\s]?to|portal\s*frame)\b/i,
+  /\bfoundation|access|cran(e|age)|logistics|site\s*survey|drawing(s)?|design\b/i,
+  /\b\d+\s*(kl|l|lit(re|er)s?|m3|tons?)\b/i,
+  /\b\d+(\.\d+)?\s*(m|mm)\b/i,
+  /\bcapacity|dimensions|span|height|width|diameter\b/i,
+]
+
+// Words like “ok/okay/that’s all/done” must NOT trigger intake
+const NON_CONSENT_ACK =
+  /\b(ok(ay)?|alright|that('?s| is)? all|done|nothing else|we('?re| are)? done)\b/i
 
 export default function Chat() {
   const [messages, setMessages] = useState<Msg[]>([
-    {
-      role: 'assistant',
-      content:
-        "Hi there! I’m the Langrad assistant. How can I help today?",
-    },
+    { role: 'assistant', content: "Hi there! I’m the Langrad assistant. How can I help today?" },
   ])
   const [input, setInput] = useState('')
 
+  // Intake state
   const [collecting, setCollecting] = useState<'none' | 'name' | 'email' | 'phone' | 'done'>('none')
   const [lead, setLead] = useState({ name: '', email: '', phone: '' })
-  const [showWhatsApp, setShowWhatsApp] = useState(false)
+  const [intakeStarted, setIntakeStarted] = useState(false)
+  const [awaitingProceedConfirm, setAwaitingProceedConfirm] = useState(false)
+
+  const [showForwardBadge, setShowForwardBadge] = useState(false)
   const [waiting, setWaiting] = useState(false)
 
   useEffect(() => {
     const el = document.getElementById('chat-scroll')
     if (el) el.scrollTop = el.scrollHeight
-  }, [messages, showWhatsApp, waiting])
+  }, [messages, showForwardBadge, waiting])
 
   function append(role: 'user' | 'assistant', content: string) {
     setMessages(prev => [...prev, { role, content }])
+  }
+
+  // Count how many project signals we’ve seen across the thread
+  function countProjectSignals(allText: string): number {
+    let count = 0
+    for (const rx of PROJECT_SIGNAL_REGEXES) {
+      if (rx.test(allText)) count++
+    }
+    return count
   }
 
   async function askLLM(user: string) {
@@ -55,6 +76,18 @@ export default function Chat() {
     if (!res.ok) return `I couldn't reach the server (status ${res.status}). Please try again.`
     const data = await res.json()
     return String(data.answer || '')
+  }
+
+  function startIntake() {
+    if (intakeStarted) return
+    setIntakeStarted(true)
+    setAwaitingProceedConfirm(false)
+    append(
+      'assistant',
+      "Okay — I’ll take your details and pass this to the engineering team so they can follow up properly."
+    )
+    append('assistant', "What’s your name?")
+    setCollecting('name')
   }
 
   async function send() {
@@ -72,34 +105,87 @@ export default function Chat() {
     }
     if (collecting === 'email') {
       if (!isEmail(q)) {
-        append('assistant', "That email didn’t look right. Please enter a valid email (e.g., name@company.com).")
+        append(
+          'assistant',
+          "That email didn’t look right. Please enter a valid email (for example: name@company.com)."
+        )
         return
       }
       setLead(v => ({ ...v, email: q }))
-      append('assistant', 'Great. Best phone number to reach you? (e.g., 0803 123 4567 or +234 803 123 4567)')
+      append('assistant', 'Great. What’s the best phone number to reach you on?')
       setCollecting('phone')
       return
     }
     if (collecting === 'phone') {
-      const p = normalizePhoneNGA(q)
-      if (!p.ok) {
-        append('assistant', 'Please enter a Nigerian number like 0803 123 4567 or +234 803 123 4567.')
+      if (!isPhoneLike(q)) {
+        append(
+          'assistant',
+          'That didn’t look like a phone number. Please include the full number with dialling code if possible.'
+        )
         return
       }
-      setLead(v => ({ ...v, phone: p.e164! }))
-      append('assistant', "Perfect — I’ll forward this to engineering for a timeline and quote.")
+      setLead(v => ({ ...v, phone: q.trim() }))
+      append(
+        'assistant',
+        "Perfect — I’ll forward this to the engineering team so they can come back to you with next steps."
+      )
       setCollecting('done')
-      setTimeout(() => setShowWhatsApp(true), 600)
-      append('assistant', "Forwarding: *your request has been noted for engineering — timeline & quote.*\nSend to Engineering on WhatsApp 👇")
+      setTimeout(() => setShowForwardBadge(true), 600)
+      append(
+        'assistant',
+        'Forwarding summary:\n*Project details recorded for engineering — they will follow up with you.*'
+      )
       return
     }
 
-    // ---- Start intake only on explicit consent or “done” ----
-    if (collecting === 'none' && (CONSENT_REGEX.test(q) || DONE_REGEX.test(q))) {
-      append('assistant', "Okay — I’ll take your details and pass this to engineering.")
-      append('assistant', "What’s your name?")
-      setCollecting('name')
-      return
+    // ---- Proceed confirmation step (neutral) ----
+    if (awaitingProceedConfirm) {
+      const hasEmail = isEmail(q)
+      const hasPhone = isPhoneLike(q)
+      const affirmative =
+        /\b(yes|yep|yeah|please|proceed|go ahead|send (me )?(the )?quote|book( a)? site (visit)?|let('s| us) proceed|move forward|follow up)\b/i.test(
+          q
+        ) && !NON_CONSENT_ACK.test(q)
+
+      if (hasEmail || hasPhone || affirmative) {
+        if (!intakeStarted) {
+          setIntakeStarted(true)
+          if (hasEmail) setLead(v => ({ ...v, email: q }))
+          if (hasPhone) setLead(v => ({ ...v, phone: q.trim() }))
+        }
+        setAwaitingProceedConfirm(false)
+
+        if (!lead.name) {
+          append(
+            'assistant',
+            "Okay — I’ll take your details and pass this to the engineering team so they can follow up properly."
+          )
+          append('assistant', "What’s your name?")
+          setCollecting('name')
+        } else if (!lead.email) {
+          append('assistant', 'Great — what’s your email address?')
+          setCollecting('email')
+        } else if (!lead.phone) {
+          append('assistant', 'And what’s the best phone number to reach you on?')
+          setCollecting('phone')
+        } else {
+          append(
+            'assistant',
+            "Perfect — I’ll forward this to the engineering team so they can come back to you with next steps."
+          )
+          setCollecting('done')
+          setTimeout(() => setShowForwardBadge(true), 600)
+          append(
+            'assistant',
+            'Forwarding summary:\n*Project details recorded for engineering — they will follow up with you.*'
+          )
+        }
+        return
+      } else {
+        setAwaitingProceedConfirm(false)
+        append('assistant', "No problem — we can keep discussing. What would you like to know next?")
+        // fall through to LLM
+      }
     }
 
     // ---- Normal: ask the model, free conversation ----
@@ -107,6 +193,34 @@ export default function Chat() {
     const answer = await askLLM(q)
     setWaiting(false)
     append('assistant', answer)
+
+    // ---- After-model: decide whether to *offer* proceed (no auto-intake) ----
+    if (!intakeStarted) {
+      const fullThread = [...messages, { role: 'user', content: q }, { role: 'assistant', content: answer }]
+        .map(m => m.content)
+        .join('\n')
+      const signals = countProjectSignals(fullThread)
+      const userAskedQuoteOrTimeline = QUOTE_OR_TIMELINE_REGEX.test(q)
+
+      // Offer proceed only when the user asked for quote/timeline AND we have enough specifics
+      if (userAskedQuoteOrTimeline && signals >= 3) {
+        setAwaitingProceedConfirm(true)
+        append(
+          'assistant',
+          'Would you like to proceed to a formal quote and have the team follow up, or would you prefer to keep discussing for now?'
+        )
+      }
+      // Also, if the user voluntarily shares contact info, we can start intake on next turn via awaitingProceedConfirm
+      const hasEmail = isEmail(q)
+      const hasPhone = isPhoneLike(q)
+      if (hasEmail || hasPhone) {
+        setAwaitingProceedConfirm(true)
+        append(
+          'assistant',
+          'Do you want me to use these details so the team can follow up formally, or would you rather keep things informal for now?'
+        )
+      }
+    }
   }
 
   return (
@@ -135,17 +249,14 @@ export default function Chat() {
             </div>
           )}
 
-          {showWhatsApp && (
+          {showForwardBadge && (
             <div className="text-left mt-2">
               <button
                 className="inline-flex items-center gap-2 px-4 py-3 rounded-2xl shadow-md cursor-default select-none"
                 style={{ background: 'var(--accent)', color: '#fff' }}
                 title="Demo: visual only"
               >
-                <svg width="20" height="20" viewBox="0 0 32 32" fill="currentColor" aria-hidden="true">
-                  <path d="M19.11 17.08a.89.89 0 0 1-.6.27c-.27 0-.6-.09-.93-.27c-.33-.18-.75-.42-1.28-.75a8.29 8.29 0 0 1-1.4-1.12c-.42-.39-.78-.81-1.09-1.26c-.3-.45-.54-.87-.72-1.26c-.18-.39-.27-.72-.27-.99c0-.18.06-.36.18-.54c.12-.18.27-.36.45-.54c.18-.18.3-.33.45-.48c.15-.15.27-.3.36-.45c.09-.15.12-.3.12-.45c0-.18-.03-.33-.09-.45c-.06-.12-.12-.24-.18-.33l-.3-.33a1.6 1.6 0 0 0-.51-.39c-.18-.09-.36-.12-.57-.12c-.18 0-.33.03-.48.09a1.6 1.6 0 0 0-.42.24c-.12.09-.24.21-.36.33c-.36.39-.6.81-.75 1.23c-.15.42-.21.87-.21 1.35c0 .48.09.93.24 1.38c.18.45.39.9.66 1.32c.27.45.6.87.96 1.26c.36.42.72.78 1.11 1.11c.39.33.81.63 1.23.9c.42.27.84.48 1.26.66c.42.18.84.33 1.29.45c.42.12.81.18 1.23.18c.48 0 .96-.06 1.41-.21c.45-.15.87-.39 1.26-.72c.15-.12.27-.27.36-.42c.09-.15.15-.3.15-.45c0-.21-.06-.42-.18-.6a2.3 2.3 0 0 0-.33-.45c-.12-.15-.24-.27-.39-.39c-.15-.12-.27-.21-.39-.27a.73.73 0 0 0-.33-.09c-.12 0-.24.03-.33.12c-.12.06-.21.15-.33.27l-.24.24zM16 2.67c-6.9 0-12.5 5.6-12.5 12.5c0 2.22.57 4.35 1.67 6.24L4 29.33l7.06-1.83c1.77.96 3.76 1.47 5.94 1.47c6.9 0 12.5-5.6 12.5-12.5S22.9 2.67 16 2.67zm0 22.76c-1.86 0-3.6-.48-5.1-1.41l-.36-.21l-4.2 1.11l1.11-4.08l-.21-.39A9.77 9.77 0 0 1 6.5 15.17c0-5.25 4.26-9.5 9.5-9.5s9.5 4.26 9.5 9.5s-4.26 9.5-9.5 9.5z"/>
-                </svg>
-                Send to Engineering on WhatsApp
+                <span>Forwarded to engineering team (demo)</span>
               </button>
             </div>
           )}
